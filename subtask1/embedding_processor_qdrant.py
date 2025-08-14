@@ -93,45 +93,7 @@ class LawEmbeddingProcessorQdrant:
                 )
             )
     
-    def clean_text(self, text: str) -> str:
-        """
-        Clean text by removing image markers and extra whitespace
-        
-        Args:
-            text: Raw text from chunk
-            
-        Returns:
-            Cleaned text
-        """
-        # Remove image markers like <<IMAGE: image006.jpg /IMAGE>>
-        text = re.sub(r'<<IMAGE:.*?/IMAGE>>', '', text)
-        
-        # Remove extra whitespace and newlines
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
-    
-    def extract_image_description(self, text: str) -> List[str]:
-        """
-        Extract image descriptions from text
-        
-        Args:
-            text: Raw text containing image markers
-            
-        Returns:
-            List of image descriptions
-        """
-        descriptions = []
-        
-        # Find text after image markers that might be descriptions
-        lines = text.split('\n')
-        for i, line in enumerate(lines):
-            if '<<IMAGE:' in line and i + 1 < len(lines):
-                next_line = lines[i + 1].strip()
-                if next_line and not next_line.startswith('<<'):
-                    descriptions.append(next_line)
-                    
-        return descriptions
+
     
     def process_text_chunk(self, chunk: Dict[str, Any]) -> Tuple[str, List[float], Dict[str, Any]]:
         """
@@ -149,8 +111,8 @@ class LawEmbeddingProcessorQdrant:
         unique_string = f"text_{chunk['law_id']}_{chunk['article_id']}_chunk{chunk_index}"
         chunk_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, unique_string))
         
-        # Clean text (already cleaned in new chunking system, but double-check)
-        clean_text = self.clean_text(chunk['text'])
+        # Text is already cleaned by text_chunker, just use directly
+        clean_text = chunk['text']
         
         # Generate embedding using Vietnamese model
         embedding = self.text_model.encode(clean_text, normalize_embeddings=True).tolist()
@@ -294,7 +256,8 @@ class LawEmbeddingProcessorQdrant:
             
             # Process image chunks if any - only for chunk_index 0 to avoid duplicates
             if chunk.get('article_images') and chunk.get('chunk_index', 0) == 0:
-                image_descriptions = self.extract_image_description(chunk.get('text', ''))
+                # Images are now tracked in chunk_images field from text_chunker
+                chunk_images = chunk.get('chunk_images', [])
                 
                 for j, image_path in enumerate(chunk['article_images']):
                     # Convert relative path to absolute
@@ -305,7 +268,8 @@ class LawEmbeddingProcessorQdrant:
                     image_path = os.path.normpath(image_path)
                     
                     if os.path.exists(image_path):
-                        description = image_descriptions[j] if j < len(image_descriptions) else ""
+                        # No separate descriptions needed since images are pre-processed
+                        description = ""
                         image_id, image_embedding, image_metadata = self.process_image_chunk(
                             chunk, image_path, description
                         )
