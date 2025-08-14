@@ -1,0 +1,156 @@
+Task Description
+The question answering (QA) task is a highly applicable problem in the field of artificial intelligence, especially in natural language processing (NLP). In particular, applying QA to the legal domain (legal QA) can help build intelligent support systems that serve users’ legal information retrieval needs. At present, complying with road traffic safety regulations is an urgent issue to ensure traffic safety and to protect the lives and property of citizens when participating in traffic. In road traffic, thoroughly understanding and strictly following traffic instructions through signs and signals is the foundation for ensuring safety for travelers. The Share Task VLSP 2025 MLQA-TSR is introduced with the aim of promoting NLP research through the QA task, helping to build systems that support users in understanding the meanings of road traffic signs and traffic scenarios based on those signs, thereby raising awareness of traffic safety. Notably, this task, for the first time, combines both image and text data with the goal of developing multimodal models to support research in NLP in particular and AI in general.
+
+The VLSP 2025 MLQA-TSR consists of two sub-tasks:
+
+Subtask 1: Multimodal Retrieval
+
+Input: 
+
+   + Question about the traffic signs in natural languages.
+
+   + Actual image of the traffic signs on the street.. 
+
+Output: Reference: articles(s) in LAW ON ROAD TRAFFIC ORDER AND SAFETY (36/2024/QH15) or National Technical Regulation on Traffic Signs and Signals (QCVN 41:2024/BGTVT)
+
+Subtask 2: Question answering
+
+Input: 
+
+    + Question about the traffic signs in natural languages.
+
+    + Actual image of the traffic signs on the street.. 
+
+    + Reference: term(s) in Regulation on Traffic or National Technical Regulation on Traffic Signs and Signals
+
+Output: Multiple-choice (4 options: A,B,C,D) or Yes/No questions. 
+
+For example (in Vietnamese language): 
+
+The traffice sign image: 
+
+
+Question: Các loại xe nào được phép lưu thông vào đoạn đường trên trong khoảng từ 6:00 đến 22:00:
+
+A. Xe khách 40 chỗ.
+
+B. Xe ô tô con
+
+C. Xe đầu kéo.
+
+D. Ô tô kéo rơ moóc
+
+Reference: Điều 26.1, P.106(a,b) trong Thông tư 54/2019/TT-BGTVT 
+
+Correct answer: B.
+
+ 
+Evaluation metric
+Subtask 1: F2 score
+
+For one sample, the F2 is computed as: 
+
+     + precision =  the number of correctly retrieved articles / the number of retrieved articles
+
+     + recall = the number of correctly retrieved articles / the number of relevant articles
+
+     + F2 = 5*precision*recal / (4*precision + recall) 
+
+The final F2 score is the average value over all samples
+
+Subtask 2: Accuracy. 
+
+Accuracy = total correct choices / Total questions 
+
+Rules
+1. The participating teams will be provided with a dataset by the Organizers and are only allowed to use the dataset provided by the competition; external datasets are not permitted.
+
+2. Teams are allowed to use open-source large language models (LLMs), and are encouraged to adopt methods that utilize small-sized but efficient LLMs. Commercial LLMs such as ChatGPT, Claude Sonet, etc., are not allowed. The used model(s) must have been published on HuggingFace or GitHub. 
+
+3. Teams must submit a technical report describing the proposed method to share the task, along with the source code that is capable of reproducing the model or system.
+
+
+
+
+HOW TO SUBMIT TO THE SYSTEM
+
+STEP 1. Rename the file as follows:
+
+Retrieval task: submission_task1.json
+QA task: submission_task2.json
+STEP 2. Compressing the json files to zip, and set the file name as: submission.zip
+
+STEP 3. Submitting the "submission.zip" file to the system.
+
+Note: Please following three steps above to create the file submission.zip for submission. If the file name is not correct, the system cannot evaluate the results.
+
+
+Sample for submission_task1.json
+
+[
+    {
+        "id": "public_test_1",
+        "image_id": "public_test_2_2",
+        "question": "Đây là biển báo gì?",
+        "relevant_articles": [
+            {
+                "law_id": "QCVN 41:2024/BGTVT",
+                "article_id": "B.13"
+            },
+           ...
+        ]
+    },
+		
+    {
+        "id": "public_test_2",
+        "image_id": "public_test_2_1",
+        "question": "Biển báo màu xanh có gạch đỏ là biển báo gì?",
+        "relevant_articles": [
+            {
+                "law_id": "QCVN 41:2024/BGTVT",
+                "article_id": "I.4"
+            },
+						...
+        ]
+    },
+		...
+]
+
+
+
+
+Sample for submission_task2.json
+
+[
+    {
+        "id": "public_test_51",
+        "image_id": "public_test_5_6",
+        "question": "Trong tất cả biển báo trong hình bên, hãy cho biết xe gắn máy bị cấm đi thẳng trong khoảng thời gian nào?",
+				"question_type": 	"Multiple choice",
+        "relevant_articles": [
+            {
+                "law_id": "QCVN 41:2024/BGTVT",
+                "article_id": "22"
+            },
+            {
+                "law_id": "QCVN 41:2024/BGTVT",
+                "article_id": "B.4"
+            }
+        ],
+        "answer": "A"
+    },
+		
+    {
+        "id": "public_test_70",
+        "image_id": "public_test_6_14",
+        "question": "Người lái xe đi trên cao tốc đế gần đoạn đường trên ảnh mà muốn ra khỏi cao tốc để đi vào tuyến tránh Huế thì phải đi vào làn đường bên phải và tìm đường ra để ra khỏi cao tốc, đúng hay sai?",
+        "question_type": "Yes/No",
+        "relevant_articles": [
+            {
+                "law_id": "QCVN 41:2024/BGTVT",
+                "article_id": "46"
+            }
+        ],
+    },
+		...
+]

@@ -1,0 +1,13 @@
+HOW TO SUBMIT TO THE SYSTEM
+
+STEP 1. Rename the file as follows:
++ Retrieval task: submission_task1.json
++ QA task: submission_task2.json
+
+STEP 2. Compressing the JSON files to a zip, and set the file name as: submission.zip
+
+STEP 3. Submit the "submission.zip" file to the system.
+
+SUBMISSION SYSTEM: https://www.codabench.org/competitions/9525/
+
+(Only the team leader with the email in the Registration Form can access the submission system)
