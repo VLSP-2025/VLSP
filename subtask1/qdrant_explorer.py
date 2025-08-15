@@ -79,7 +79,7 @@ class QdrantExplorer:
             print(f"   Status: {info['indexed']}")
             print()
     
-    def sample_points(self, collection_name: str, limit: int = 5) -> List[Dict]:
+    def sample_points(self, collection_name: str, limit: int = 5, with_vectors: bool = False) -> List[Dict]:
         """Get sample points from a collection"""
         if not self.client:
             return []
@@ -89,26 +89,30 @@ class QdrantExplorer:
                 collection_name=collection_name,
                 limit=limit,
                 with_payload=True,
-                with_vectors=False  # Don't include vectors to save space
+                with_vectors=with_vectors
             )
             
-            return [
-                {
+            points = []
+            for point in result[0]:
+                point_data = {
                     "id": point.id,
                     "payload": point.payload
                 }
-                for point in result[0]
-            ]
+                if with_vectors and point.vector:
+                    point_data["vector"] = point.vector
+                points.append(point_data)
+            
+            return points
         except Exception as e:
             print(f"Error sampling points: {e}")
             return []
     
-    def show_sample_data(self, collection_name: str, limit: int = 3):
+    def show_sample_data(self, collection_name: str, limit: int = 3, show_vectors: bool = False):
         """Display sample data from collection"""
         print(f"🔍 SAMPLE DATA FROM '{collection_name}'")
         print("=" * 50)
         
-        samples = self.sample_points(collection_name, limit)
+        samples = self.sample_points(collection_name, limit, with_vectors=show_vectors)
         
         if not samples:
             print("❌ No data found or error occurred")
@@ -137,6 +141,28 @@ class QdrantExplorer:
                 print(f"   Image: {payload.get('image_name', 'N/A')}")
                 print(f"   Size: {payload.get('image_size', 'N/A')}")
                 print(f"   Description: {payload.get('image_description', 'N/A')}")
+            
+            # Show vector embedding if requested
+            if show_vectors and 'vector' in sample:
+                vector = sample['vector']
+                print(f"   🎯 Vector Embedding:")
+                print(f"      Dimensions: {len(vector)}")
+                print(f"      First 10 values: {[round(v, 6) for v in vector[:10]]}")
+                print(f"      Middle 10 values: {[round(v, 6) for v in vector[len(vector)//2-5:len(vector)//2+5]]}")
+                print(f"      Last 10 values: {[round(v, 6) for v in vector[-10:]]}")
+                
+                # Calculate vector statistics
+                import numpy as np
+                v_array = np.array(vector)
+                norm = np.linalg.norm(v_array)
+                
+                print(f"      📈 Statistics:")
+                print(f"         Min: {v_array.min():.6f}")
+                print(f"         Max: {v_array.max():.6f}")
+                print(f"         Mean: {v_array.mean():.6f}")
+                print(f"         Std: {v_array.std():.6f}")
+                print(f"         L2 Norm: {norm:.6f}")
+                print(f"         Normalized: {'✅ Yes' if abs(norm - 1.0) < 0.01 else '❌ No'}")
             
             print()
     
@@ -258,7 +284,7 @@ class QdrantExplorer:
         
         return stats
     
-    def export_to_json(self, collection_name: str, output_file: str, limit: Optional[int] = None):
+    def export_to_json(self, collection_name: str, output_file: str, limit: Optional[int] = None, with_vectors: bool = False):
         """Export collection data to JSON file"""
         if not self.client:
             print("❌ No database connection")
@@ -266,26 +292,33 @@ class QdrantExplorer:
         
         try:
             print(f"📤 Exporting {collection_name} to {output_file}...")
+            if with_vectors:
+                print("   ⚠️ Including vectors - file will be large!")
             
             result = self.client.scroll(
                 collection_name=collection_name,
                 limit=limit or 10000,  # Default large number
                 with_payload=True,
-                with_vectors=False  # Don't export vectors (too large)
+                with_vectors=with_vectors
             )
             
-            data = [
-                {
+            data = []
+            for point in result[0]:
+                point_data = {
                     "id": point.id,
                     "payload": point.payload
                 }
-                for point in result[0]
-            ]
+                if with_vectors and point.vector:
+                    point_data["vector"] = point.vector
+                data.append(point_data)
             
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             
-            print(f"✅ Exported {len(data)} points to {output_file}")
+            file_size = os.path.getsize(output_file) / 1024 / 1024  # MB
+            vector_info = "with vectors" if with_vectors else "without vectors"
+            print(f"✅ Exported {len(data)} points to {output_file} ({vector_info})")
+            print(f"📏 File size: {file_size:.2f} MB")
             
         except Exception as e:
             print(f"❌ Export failed: {e}")
@@ -304,13 +337,15 @@ def main():
         print("1. Show collections overview")
         print("2. Sample data from text collection")
         print("3. Sample data from image collection") 
-        print("4. Search by law ID")
-        print("5. Show database statistics")
-        print("6. Export collection to JSON")
+        print("4. Sample data WITH VECTORS from text collection")
+        print("5. Sample data WITH VECTORS from image collection")
+        print("6. Search by law ID")
+        print("7. Show database statistics")
+        print("8. Export collection to JSON")
         print("0. Exit")
         print("-"*60)
         
-        choice = input("Enter your choice (0-6): ").strip()
+        choice = input("Enter your choice (0-8): ").strip()
         
         if choice == "0":
             print("👋 Goodbye!")
@@ -322,10 +357,16 @@ def main():
         elif choice == "3":
             explorer.show_sample_data("law_image_collection")
         elif choice == "4":
+            print("\n🎯 SHOWING TEXT VECTORS:")
+            explorer.show_sample_data("law_text_collection", limit=2, show_vectors=True)
+        elif choice == "5":
+            print("\n🎯 SHOWING IMAGE VECTORS:")
+            explorer.show_sample_data("law_image_collection", limit=2, show_vectors=True)
+        elif choice == "6":
             law_id = input("Enter law ID (e.g., 'QCVN 41:2024/BGTVT'): ").strip()
             if law_id:
                 explorer.show_law_summary(law_id)
-        elif choice == "5":
+        elif choice == "7":
             stats = explorer.get_statistics()
             print("\n📊 DATABASE STATISTICS")
             print("="*50)
@@ -344,11 +385,22 @@ def main():
                 print(f"  Range: {chunk_stats['min']}-{chunk_stats['max']} characters")
                 print(f"  Total chunks: {chunk_stats['total_chunks']}")
                 
-        elif choice == "6":
-            collection_name = input("Enter collection name: ").strip()
+        elif choice == "8":
+            collection_name = input("Enter collection name (law_text_collection/law_image_collection): ").strip()
+            if collection_name not in ["law_text_collection", "law_image_collection"]:
+                print("❌ Invalid collection name")
+                continue
+                
             output_file = input("Enter output file name (e.g., 'export.json'): ").strip()
-            if collection_name and output_file:
-                explorer.export_to_json(collection_name, output_file)
+            if not output_file:
+                print("❌ Invalid file name")
+                continue
+                
+            include_vectors = input("Include vector embeddings? (y/n): ").strip().lower() == 'y'
+            limit = input("Limit number of points (default: all): ").strip()
+            limit = int(limit) if limit.isdigit() else None
+            
+            explorer.export_to_json(collection_name, output_file, limit, include_vectors)
         else:
             print("❌ Invalid choice. Please try again.")
 

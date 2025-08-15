@@ -21,7 +21,6 @@ class LawEmbeddingProcessorQdrant:
                  qdrant_api_key: Optional[str] = None):
         """
         Initialize the embedding processor with Qdrant
-        
         Args:
             text_model_name: Vietnamese text embedding model
             qdrant_url: Qdrant server URL or ":memory:" for local
@@ -37,11 +36,13 @@ class LawEmbeddingProcessorQdrant:
         # Initialize image embedding model (CLIP from transformers)
         print("Loading image embedding model (CLIP from transformers)...")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        clip_model_name = "openai/clip-vit-base-patch32"
+        clip_model_name = "tanganke/clip-vit-base-patch32_gtsrb"
         self.clip_model = CLIPModel.from_pretrained(clip_model_name).to(self.device)
-        self.clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
+        # Use standard OpenAI processor since the custom model doesn't have processor config
+        self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
         # Get actual image embedding size from model
-        self.image_vector_size = self.clip_model.config.projection_dim
+        # Use hidden_size for pooler_output (768D) instead of projection_dim (512D)
+        self.image_vector_size = self.clip_model.config.vision_config.hidden_size
         
         # Initialize Qdrant client
         print("Initializing Qdrant client...")
@@ -175,10 +176,12 @@ class LawEmbeddingProcessorQdrant:
             # Move inputs to device
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             
-            # Generate embedding
+            # Generate embedding using vision model directly 
             with torch.no_grad():
-                outputs = self.clip_model.get_image_features(**inputs)
-                embedding = outputs.cpu().numpy().flatten()
+                # Get full model output
+                outputs = self.clip_model.vision_model(**inputs)
+                # Use pooler_output for 768D embedding (instead of get_image_features for 512D)
+                embedding = outputs.pooler_output.cpu().numpy().flatten()
                 # Normalize embedding
                 embedding = embedding / np.linalg.norm(embedding)
                 embedding = embedding.tolist()
@@ -278,6 +281,7 @@ class LawEmbeddingProcessorQdrant:
                             # Debug: Check image vector size
                             if len(image_points) == 0:  # Only show for first image
                                 print(f"   🔍 Debug: Image embedding size = {len(image_embedding)}")
+                                print(f"   🔍 Expected image vector size: {self.image_vector_size}")
                             
                             image_points.append(PointStruct(
                                 id=image_id,
@@ -328,142 +332,6 @@ class LawEmbeddingProcessorQdrant:
         print(f"   Image collection: {image_info.points_count} points")
         print(f"   Vector dimensions: Text={self.text_vector_size}, Image={self.image_vector_size}")
     
-    def search_text(self, query: str, limit: int = 5, law_id: str = None, min_score: float = 0.0) -> List[Dict]:
-        """
-        Search text collection
-        
-        Args:
-            query: Search query in Vietnamese
-            limit: Number of results to return
-            law_id: Optional filter by law_id
-            min_score: Minimum similarity score
-            
-        Returns:
-            List of search results
-        """
-        # Generate query embedding
-        query_embedding = self.text_model.encode(query, normalize_embeddings=True).tolist()
-        
-        # Prepare filter
-        must_conditions = []
-        if law_id:
-            must_conditions.append(models.FieldCondition(
-                key="law_id",
-                match=models.MatchValue(value=law_id)
-            ))
-        
-        query_filter = models.Filter(must=must_conditions) if must_conditions else None
-        
-        # Search
-        results = self.client.search(
-            collection_name=self.text_collection_name,
-            query_vector=query_embedding,
-            query_filter=query_filter,
-            limit=limit,
-            score_threshold=min_score
-        )
-        
-        return [
-            {
-                "id": result.id,
-                "score": result.score,
-                "payload": result.payload
-            }
-            for result in results
-        ]
-    
-    def search_image(self, query: str, limit: int = 5, law_id: str = None, min_score: float = 0.0) -> List[Dict]:
-        """
-        Search image collection using text query
-        
-        Args:
-            query: Search query in Vietnamese/English
-            limit: Number of results to return
-            law_id: Optional filter by law_id
-            min_score: Minimum similarity score
-            
-        Returns:
-            List of search results
-        """
-        # Encode text query using CLIP
-        inputs = self.clip_processor(text=[query], return_tensors="pt", padding=True)
-        
-        # Move inputs to device
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = self.clip_model.get_text_features(**inputs)
-            query_embedding = outputs.cpu().numpy().flatten()
-            # Normalize embedding
-            query_embedding = query_embedding / np.linalg.norm(query_embedding)
-            query_embedding = query_embedding.tolist()
-        
-        # Prepare filter
-        must_conditions = []
-        if law_id:
-            must_conditions.append(models.FieldCondition(
-                key="law_id",
-                match=models.MatchValue(value=law_id)
-            ))
-        
-        query_filter = models.Filter(must=must_conditions) if must_conditions else None
-        
-        # Search
-        results = self.client.search(
-            collection_name=self.image_collection_name,
-            query_vector=query_embedding,
-            query_filter=query_filter,
-            limit=limit,
-            score_threshold=min_score
-        )
-        
-        return [
-            {
-                "id": result.id,
-                "score": result.score,
-                "payload": result.payload
-            }
-            for result in results
-        ]
-    
-    def hybrid_search(self, query: str, limit: int = 10, law_id: str = None, 
-                     text_weight: float = 0.7, image_weight: float = 0.3) -> List[Dict]:
-        """
-        Perform hybrid search across both text and image collections
-        
-        Args:
-            query: Search query
-            limit: Total number of results
-            law_id: Optional filter by law_id
-            text_weight: Weight for text results (0-1)
-            image_weight: Weight for image results (0-1)
-            
-        Returns:
-            Combined and re-ranked results
-        """
-        # Search both collections
-        text_limit = int(limit * text_weight * 2)  # Get more to allow for reranking
-        image_limit = int(limit * image_weight * 2)
-        
-        text_results = self.search_text(query, limit=text_limit, law_id=law_id)
-        image_results = self.search_image(query, limit=image_limit, law_id=law_id)
-        
-        # Combine and reweight scores
-        combined_results = []
-        
-        for result in text_results:
-            result['weighted_score'] = result['score'] * text_weight
-            result['type'] = 'text'
-            combined_results.append(result)
-        
-        for result in image_results:
-            result['weighted_score'] = result['score'] * image_weight  
-            result['type'] = 'image'
-            combined_results.append(result)
-        
-        # Sort by weighted score and return top results
-        combined_results.sort(key=lambda x: x['weighted_score'], reverse=True)
-        return combined_results[:limit]
     
     def get_collection_stats(self) -> Dict[str, Any]:
         """Get statistics about the collections"""
@@ -481,7 +349,7 @@ class LawEmbeddingProcessorQdrant:
                 "name": self.image_collection_name,
                 "points_count": image_info.points_count,
                 "vector_size": self.image_vector_size,
-                "model": "openai/clip-vit-base-patch32"
+                "model": "tanganke/clip-vit-base-patch32_gtsrb (768D pooler_output)"
             }
         }
 
@@ -511,52 +379,6 @@ def main():
     print(f"   Text: {stats['text_collection']['points_count']} points ({stats['text_collection']['vector_size']}D)")
     print(f"   Image: {stats['image_collection']['points_count']} points ({stats['image_collection']['vector_size']}D)")
     
-    # Example searches
-    print("\n" + "="*80)
-    print("🔍 EXAMPLE SEARCHES")
-    print("=" * 80)
-    
-    # Vietnamese text search
-    print("\n📝 Vietnamese text search: 'biển báo giao thông đường bộ'")
-    text_results = processor.search_text("biển báo giao thông đường bộ", limit=3)
-    for i, result in enumerate(text_results):
-        payload = result['payload']
-        chunk_info = f"Chunk {payload.get('chunk_index', 0)+1}" if payload.get('chunk_index') is not None else ""
-        print(f"{i+1}. [{payload['law_id']} - Article {payload['article_id']} {chunk_info}] {payload['article_title']}")
-        print(f"   🎯 Score: {result['score']:.4f}")
-        print(f"   📄 Content: {payload.get('chunk_preview', payload.get('text_content', ''))[:150]}...")
-        print(f"   📏 Chunk size: {payload.get('text_length', 0)} chars")
-        print()
-    
-    # Image search
-    print("\n🖼️ Image search: 'long môn đường bộ giao thông'")
-    image_results = processor.search_image("long môn đường bộ giao thông", limit=3)
-    for i, result in enumerate(image_results):
-        payload = result['payload']
-        print(f"{i+1}. [{payload['law_id']} - Article {payload['article_id']}] {payload['article_title']}")
-        print(f"   🎯 Score: {result['score']:.4f}")
-        print(f"   🖼️ Image: {payload['image_name']}")
-        print(f"   📝 Description: {payload['image_description']}")
-        print()
-    
-    # Hybrid search
-    print("\n🔄 Hybrid search: 'kích thước biển báo'")
-    hybrid_results = processor.hybrid_search("kích thước biển báo", limit=5)
-    for i, result in enumerate(hybrid_results):
-        payload = result['payload']
-        chunk_info = ""
-        if result['type'] == 'text' and payload.get('chunk_index') is not None:
-            chunk_info = f" Chunk {payload.get('chunk_index', 0)+1}"
-        
-        print(f"{i+1}. [{result['type'].upper()}] [{payload['law_id']} - Article {payload['article_id']}{chunk_info}] {payload['article_title']}")
-        print(f"   🎯 Weighted Score: {result['weighted_score']:.4f}")
-        if result['type'] == 'text':
-            content = payload.get('chunk_preview', payload.get('text_content', ''))
-            print(f"   📄 Content: {content[:100]}...")
-            print(f"   📏 Chunk size: {payload.get('text_length', 0)} chars")
-        else:
-            print(f"   🖼️ Image: {payload['image_name']} - {payload['image_description']}")
-        print()
-
+ 
 if __name__ == "__main__":
     main()
