@@ -18,13 +18,15 @@ class LawEmbeddingProcessorQdrant:
     def __init__(self, 
                  text_model_name: str = "VoVanPhuc/sup-SimCSE-VietNamese-phobert-base",
                  qdrant_url: str = ":memory:",  # ":memory:" for in-memory, or "localhost:6333" for server
-                 qdrant_api_key: Optional[str] = None):
+                 qdrant_api_key: Optional[str] = None,
+                 recreate_collections: bool = False):
         """
         Initialize the embedding processor with Qdrant
         Args:
             text_model_name: Vietnamese text embedding model
             qdrant_url: Qdrant server URL or ":memory:" for local
             qdrant_api_key: API key for Qdrant Cloud (optional)
+            recreate_collections: If True, delete and recreate collections (clears existing data)
         """
         self.qdrant_url = qdrant_url
         
@@ -61,15 +63,31 @@ class LawEmbeddingProcessorQdrant:
         self.image_collection_name = "law_image_collection"
         
         # Create collections
-        self._create_collections()
+        self._create_collections(recreate=recreate_collections)
         
-    def _create_collections(self):
-        """Create Qdrant collections for text and images"""
+    def _create_collections(self, recreate: bool = False):
+        """Create Qdrant collections for text and images
         
-        # Create text collection
+        Args:
+            recreate: If True, delete existing collections and recreate them
+        """
+        
+        # Handle text collection
         try:
             self.client.get_collection(self.text_collection_name)
-            print(f"Text collection '{self.text_collection_name}' already exists")
+            if recreate:
+                print(f"Deleting existing text collection '{self.text_collection_name}'...")
+                self.client.delete_collection(self.text_collection_name)
+                print(f"Creating new text collection '{self.text_collection_name}'...")
+                self.client.create_collection(
+                    collection_name=self.text_collection_name,
+                    vectors_config=VectorParams(
+                        size=self.text_vector_size,
+                        distance=Distance.COSINE
+                    )
+                )
+            else:
+                print(f"Text collection '{self.text_collection_name}' already exists")
         except:
             print(f"Creating text collection '{self.text_collection_name}'...")
             self.client.create_collection(
@@ -80,10 +98,22 @@ class LawEmbeddingProcessorQdrant:
                 )
             )
         
-        # Create image collection  
+        # Handle image collection  
         try:
             self.client.get_collection(self.image_collection_name)
-            print(f"Image collection '{self.image_collection_name}' already exists")
+            if recreate:
+                print(f"Deleting existing image collection '{self.image_collection_name}'...")
+                self.client.delete_collection(self.image_collection_name)
+                print(f"Creating new image collection '{self.image_collection_name}'...")
+                self.client.create_collection(
+                    collection_name=self.image_collection_name,
+                    vectors_config=VectorParams(
+                        size=self.image_vector_size,
+                        distance=Distance.COSINE
+                    )
+                )
+            else:
+                print(f"Image collection '{self.image_collection_name}' already exists")
         except:
             print(f"Creating image collection '{self.image_collection_name}'...")
             self.client.create_collection(
@@ -96,20 +126,24 @@ class LawEmbeddingProcessorQdrant:
     
 
     
-    def process_text_chunk(self, chunk: Dict[str, Any]) -> Tuple[str, List[float], Dict[str, Any]]:
+    def process_text_chunk(self, chunk: Dict[str, Any], array_index: Optional[int] = None) -> Tuple[str, List[float], Dict[str, Any]]:
         """
         Process a single text chunk for embedding
         
         Args:
             chunk: Chunk data from JSON (now supports sub-chunks)
+            array_index: Index in the chunks array to ensure uniqueness
             
         Returns:
             Tuple of (chunk_id, embedding_vector, metadata)
         """
-        # Generate unique ID for this chunk - use UUID format
+        # Generate unique ID for this chunk - use UUID format with array index for uniqueness
         chunk_index = chunk.get('chunk_index', 0)
-        # Create a deterministic but unique ID based on content
-        unique_string = f"text_{chunk['law_id']}_{chunk['article_id']}_chunk{chunk_index}"
+        # Include array_index to handle duplicate (law_id, article_id, chunk_index) combinations
+        if array_index is not None:
+            unique_string = f"text_{chunk['law_id']}_{chunk['article_id']}_chunk{chunk_index}_idx{array_index}"
+        else:
+            unique_string = f"text_{chunk['law_id']}_{chunk['article_id']}_chunk{chunk_index}"
         chunk_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, unique_string))
         
         # Text is already cleaned by text_chunker, just use directly
@@ -132,11 +166,10 @@ class LawEmbeddingProcessorQdrant:
             "end_char": chunk.get('end_char', len(clean_text)),
             "sentences_count": chunk.get('sentences_count', 1),
             
-            # Image info
+            # Image info (streamlined)
             "has_images": chunk.get('has_images', False),
-            "chunk_has_images": len(chunk.get('chunk_images', [])) > 0,
-            "article_image_count": len(chunk.get('article_images', [])),
-            "chunk_image_count": len(chunk.get('chunk_images', [])),
+            "article_images": chunk["article_images"],
+            "chunk_images": chunk["chunk_images"],
             
             # Text content
             "text_content": clean_text,  # Store full text since chunks are now smaller
@@ -183,21 +216,34 @@ class LawEmbeddingProcessorQdrant:
                 # Use pooler_output for 768D embedding (instead of get_image_features for 512D)
                 embedding = outputs.pooler_output.cpu().numpy().flatten()
                 # Normalize embedding
-                embedding = embedding / np.linalg.norm(embedding)
-                embedding = embedding.tolist()
+                #embedding = embedding / np.linalg.norm(embedding)
+                #embedding = embedding.tolist()
             
-            # Prepare metadata (Qdrant payload)
+            # Prepare metadata (Qdrant payload) - Optimized for RAG search
             metadata = {
+                # Core identification (essential for matching)
                 "law_id": chunk['law_id'],
                 "law_title": chunk['law_title'],
                 "article_id": str(chunk['article_id']),
                 "article_title": chunk['article_title'],
                 "chunk_type": "image",
-                "image_path": image_path,
+                
+                # Image identification
                 "image_name": Path(image_path).name,
-                "image_description": description,
-                "related_text_chunk": f"text_{chunk['law_id'].replace(':', '_').replace('/', '_')}_{chunk['article_id']}",
-                "image_size": f"{image.size[0]}x{image.size[1]}"
+                "image_path": image_path,  # Keep for reference/debugging
+                
+                # Article context (helps with text-image correlation)
+                "article_text_preview": chunk.get('text', '')[:200] if chunk.get('text') else '',
+                
+                # Image metadata for context
+                "image_index_in_article": chunk.get('article_images', []).index(image_path) if image_path in chunk.get('article_images', []) else -1,
+                "total_images_in_article": len(chunk.get('article_images', [])),
+                
+                # Note: OCR text not available in knowledge base chunks
+                # Note: Removed redundant/problematic fields:
+                # - "image_description": Always empty in current data
+                # - "related_text_chunk": Format doesn't match actual text chunk UUIDs
+                # - "image_size": Not useful for semantic similarity search
             }
             
             return chunk_id, embedding, metadata
@@ -242,8 +288,8 @@ class LawEmbeddingProcessorQdrant:
             
             print(f"  └─ Chunk {chunk_index+1}: {len(chunk.get('text', ''))} chars")
             
-            # Process text chunk
-            text_id, text_embedding, text_metadata = self.process_text_chunk(chunk)
+            # Process text chunk with array index to ensure uniqueness
+            text_id, text_embedding, text_metadata = self.process_text_chunk(chunk, array_index=i)
             
             # Debug: Check vector size
             if chunks_processed == 0:  # Only show for first chunk
@@ -362,7 +408,8 @@ def main():
     
     processor = LawEmbeddingProcessorQdrant(
         text_model_name="VoVanPhuc/sup-SimCSE-VietNamese-phobert-base",
-        qdrant_url="./qdrant_db"  # File-based storage
+        qdrant_url="./qdrant_db",  # File-based storage
+        recreate_collections=True  # Clear existing data to avoid duplicates
     )
     
     # Process chunks file

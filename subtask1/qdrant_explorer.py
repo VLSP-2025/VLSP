@@ -132,15 +132,26 @@ class QdrantExplorer:
                 print(f"   Title: {payload.get('article_title', 'N/A')}")
                 print(f"   Chunk Index: {payload.get('chunk_index', 'N/A')}")
                 print(f"   Text Length: {payload.get('text_length', 'N/A')} chars")
+                print(f"   Has Images: {payload.get('has_images', 'N/A')}")
+                if payload.get('article_images'):
+                    print(f"   Article Images: {len(payload.get('article_images', []))} total")
+                if payload.get('chunk_images'):
+                    print(f"   Chunk Images: {len(payload.get('chunk_images', []))} in this chunk")
                 print(f"   Content Preview: {payload.get('chunk_preview', payload.get('text_content', 'N/A'))[:100]}...")
                 
             elif payload.get('chunk_type') == 'image':
                 print(f"   Type: Image")
                 print(f"   Law: {payload.get('law_id', 'N/A')}")
                 print(f"   Article: {payload.get('article_id', 'N/A')}")
+                print(f"   Title: {payload.get('article_title', 'N/A')}")
                 print(f"   Image: {payload.get('image_name', 'N/A')}")
-                print(f"   Size: {payload.get('image_size', 'N/A')}")
-                print(f"   Description: {payload.get('image_description', 'N/A')}")
+                print(f"   Path: {payload.get('image_path', 'N/A')}")
+                print(f"   Image Index: {payload.get('image_index_in_article', 'N/A')} / {payload.get('total_images_in_article', 'N/A')}")
+                article_preview = payload.get('article_text_preview', '')
+                if article_preview:
+                    print(f"   Article Preview: {article_preview[:100]}...")
+                else:
+                    print(f"   Article Preview: N/A")
             
             # Show vector embedding if requested
             if show_vectors and 'vector' in sample:
@@ -231,11 +242,15 @@ class QdrantExplorer:
                             print(f"       Title: {title}")
                 
                 elif collection_name == "law_image_collection":
-                    # Show image info
+                    # Show image info with new metadata
                     for result in results[:3]:  # Show first 3
                         payload = result['payload']
                         print(f"     Image: {payload.get('image_name', 'N/A')}")
-                        print(f"       Article: {payload.get('article_id', 'N/A')}")
+                        print(f"       Article: {payload.get('article_id', 'N/A')} ({payload.get('article_title', 'No title')})")
+                        print(f"       Position: {payload.get('image_index_in_article', 'N/A')} / {payload.get('total_images_in_article', 'N/A')}")
+                        article_preview = payload.get('article_text_preview', '')
+                        if article_preview:
+                            print(f"       Context: {article_preview[:50]}...")
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get detailed statistics about the database"""
@@ -283,6 +298,61 @@ class QdrantExplorer:
                 print(f"Error getting detailed stats: {e}")
         
         return stats
+    
+    def analyze_metadata_fields(self, collection_name: str, limit: int = 100):
+        """Analyze metadata fields in a collection"""
+        if not self.client:
+            print("❌ No database connection")
+            return
+        
+        try:
+            print(f"🔍 Analyzing metadata fields in {collection_name}")
+            print("=" * 50)
+            
+            result = self.client.scroll(
+                collection_name=collection_name,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            # Collect all unique fields
+            all_fields = set()
+            field_types = {}
+            field_examples = {}
+            
+            for point in result[0]:
+                payload = point.payload
+                for key, value in payload.items():
+                    all_fields.add(key)
+                    
+                    # Track field types
+                    field_type = type(value).__name__
+                    if key not in field_types:
+                        field_types[key] = set()
+                    field_types[key].add(field_type)
+                    
+                    # Save examples
+                    if key not in field_examples:
+                        field_examples[key] = []
+                    if len(field_examples[key]) < 3:  # Keep max 3 examples
+                        field_examples[key].append(value)
+            
+            # Display analysis
+            print(f"📊 Found {len(all_fields)} unique metadata fields:")
+            print()
+            
+            for field in sorted(all_fields):
+                types = ", ".join(field_types[field])
+                examples = field_examples[field][:2]  # Show first 2 examples
+                
+                print(f"🔹 {field}")
+                print(f"   Type(s): {types}")
+                print(f"   Examples: {examples}")
+                print()
+                
+        except Exception as e:
+            print(f"❌ Error analyzing metadata: {e}")
     
     def export_to_json(self, collection_name: str, output_file: str, limit: Optional[int] = None, with_vectors: bool = False):
         """Export collection data to JSON file"""
@@ -341,11 +411,12 @@ def main():
         print("5. Sample data WITH VECTORS from image collection")
         print("6. Search by law ID")
         print("7. Show database statistics")
-        print("8. Export collection to JSON")
+        print("8. Analyze metadata fields")
+        print("9. Export collection to JSON")
         print("0. Exit")
         print("-"*60)
         
-        choice = input("Enter your choice (0-8): ").strip()
+        choice = input("Enter your choice (0-9): ").strip()
         
         if choice == "0":
             print("👋 Goodbye!")
@@ -386,6 +457,13 @@ def main():
                 print(f"  Total chunks: {chunk_stats['total_chunks']}")
                 
         elif choice == "8":
+            print("\n🔍 Metadata Analysis:")
+            collection = input("Enter collection name (law_text_collection/law_image_collection): ").strip()
+            if collection:
+                limit = input("Number of points to analyze (default 100): ").strip()
+                limit = int(limit) if limit.isdigit() else 100
+                explorer.analyze_metadata_fields(collection, limit)
+        elif choice == "9":
             collection_name = input("Enter collection name (law_text_collection/law_image_collection): ").strip()
             if collection_name not in ["law_text_collection", "law_image_collection"]:
                 print("❌ Invalid collection name")
